@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../AMICorpusXML"
+		},
+		{
+			"path": "../../../../dsi/gannot-lab/gannot-lab2/datasets2/amicorpus"
+		},
+		{
+			"path": "../AMICorpus-Meeting-Transcript-Extraction"
+		}
+	],
+	"settings": {}
+}
