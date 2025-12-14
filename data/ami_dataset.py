@@ -252,8 +252,6 @@ class AMIWordChunkDataset(torch.utils.data.Dataset):
         }
 
 
-
-
 if __name__ == "__main__":
     convs = load_conversations("/home/workspace/yoavellinson/LLM_SD/data/ami_synced/ami_utterances.csv")
     train_convs, test_convs = split_conversations(convs)
