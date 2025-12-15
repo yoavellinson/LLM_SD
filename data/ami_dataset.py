@@ -4,6 +4,20 @@ import pandas as pd
 from collections import defaultdict
 import random 
 
+import re
+_PUNCT_RE = re.compile(r"[^\w\s]")
+
+def remove_punctuation(words):
+    """
+    Remove punctuation from a list of word tokens.
+    Keeps alphanumerics, drops empty tokens.
+    """
+    clean = []
+    for w in words:
+        w2 = _PUNCT_RE.sub("", w)
+        if w2:
+            clean.append(w2)
+    return clean
 
 def ami_collate_fn(batch):
     max_num_speakers = max(b["num_speakers"] for b in batch)
@@ -242,9 +256,10 @@ class AMIWordChunkDataset(torch.utils.data.Dataset):
                 self.rng,
                 self.scramble_window,
             )
-
+        clean_words = remove_punctuation(input_words)
+        clean_input_words = " ".join(clean_words)
         return {
-            "input_text": " ".join(input_words),
+            "input_text": clean_input_words ,
             "target": target,
             "speakers": speakers,
             "num_speakers": len(speakers),
