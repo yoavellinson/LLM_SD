@@ -1,11 +1,15 @@
 import torch
 from torch.utils.data import Dataset,DataLoader
 import pandas as pd
-from collections import defaultdict
 import random 
-
+from torch.nn.utils.rnn import pad_sequence
+import soundfile as sf
+from pathlib import Path
 import re
+
 _PUNCT_RE = re.compile(r"[^\w\s]")
+PRE_PAD  = 0.5   # seconds
+POST_PAD = 1.0   # seconds
 
 def remove_punctuation(words):
     """
@@ -19,60 +23,113 @@ def remove_punctuation(words):
             clean.append(w2)
     return clean
 
+
 def ami_collate_fn(batch):
     max_num_speakers = max(b["num_speakers"] for b in batch)
 
+    audio = [torch.tensor(b["input_audio"]) for b in batch]
+    audio_lens = torch.tensor([a.shape[-1] for a in audio])
+
+    audio_padded = pad_sequence(audio, batch_first=True)
+    meeting = [b['meeting'] for b in batch]
     return {
+        'meeting': meeting,
+        # text
         "input_text": [b["input_text"] for b in batch],
         "target": [b["target"] for b in batch],
 
-        # per-sample
-        "speakers": [b["speakers"] for b in batch],
-        "num_speakers": [b["num_speakers"] for b in batch],
-        "arrival_order": [b["arrival_order"] for b in batch],
+        # audio
+        "audio": audio_padded,          # [B, T_max]
+        "audio_lens": audio_lens,        # [B]
 
-        # batch-level
+        # speaker metadata
+        "arrival_order": [b["arrival_order"] for b in batch],
+        "num_speakers": [b["num_speakers"] for b in batch],
         "max_num_speakers": max_num_speakers,
     }
+
+def load_audio_segment(
+    path,
+    start_time,
+    end_time,
+    sr=16000,
+    pre_pad=PRE_PAD,
+    post_pad=POST_PAD,
+):
+    """
+    Load an audio segment with safety padding so the audio
+    fully covers the text span.
+
+    Args:
+        path (str or Path): audio file path
+        start_time (float): text-aligned start time (sec)
+        end_time (float): text-aligned end time (sec)
+        sr (int): expected sample rate
+        pre_pad (float): seconds to pad before start
+        post_pad (float): seconds to pad after end
+    """
+
+    audio, file_sr = sf.read(path, always_2d=False)
+
+    if file_sr != sr:
+        raise RuntimeError(
+            f"Sample rate mismatch: file={file_sr}, expected={sr}"
+        )
+
+    # mono
+    if audio.ndim > 1:
+        audio = audio[:, 0]
+
+    audio_len_sec = len(audio) / sr
+
+    # ---- expand time window (Fix 1) ----
+    audio_start = max(0.0, start_time - pre_pad)
+    audio_end   = min(audio_len_sec, end_time + post_pad)
+
+    # ---- convert to samples ----
+    s = int(audio_start * sr)
+    e = int(audio_end * sr)
+
+    if e <= s:
+        raise ValueError(
+            f"Invalid audio slice: start={audio_start}, end={audio_end}"
+        )
+
+    return audio[s:e]
 
 
 def meeting_to_words(df):
     """
-    Convert meeting DataFrame into a per-word stream with real times.
+    Build per-word stream with real times and audio_path.
     """
     words = []
 
     for _, row in df.iterrows():
         toks = row["text"].split()
+        if not toks:
+            continue
+
+        t0 = row["start_time"]
+        t1 = row["end_time"]
         n = len(toks)
-        if n == 0:
-            continue
 
-        # Distribute word times uniformly inside the utterance
-        t0 = row["start_real"]
-        t1 = row["end_real"]
+        dt = (t1 - t0) / n if (t0 is not None and t1 is not None and t1 > t0) else 0.0
 
-        if t0 is None or t1 is None or t1 <= t0:
-            # fallback: no timing, treat as non-overlapping
-            for w in toks:
-                words.append({
-                    "word": w,
-                    "speaker": row["speaker"],
-                    "start": None,
-                    "end": None,
-                })
-            continue
-
-        dt = (t1 - t0) / n
         for i, w in enumerate(toks):
             words.append({
                 "word": w,
                 "speaker": row["speaker"],
-                "start": t0 + i * dt,
-                "end": t0 + (i + 1) * dt,
+
+                # real timing
+                "start_time": t0 + i * dt if t0 is not None else None,
+                "end_time": t0 + (i + 1) * dt if t0 is not None else None,
+
+                # 🔑 PROPAGATE MIXTURE AUDIO PATH
+                "audio_path": row["audio_path"],
             })
 
     return words
+
 
 
 def load_conversations(csv_path):
@@ -142,17 +199,17 @@ def find_overlap_indices(words):
 
     for i in range(len(words)):
         wi = words[i]
-        if wi["start"] is None:
+        if wi["start_time"] is None:
             continue
 
         for j in range(i + 1, len(words)):
             wj = words[j]
-            if wj["start"] is None:
+            if wj["start_time"] is None:
                 continue
 
             # different speakers + time overlap
             if wi["speaker"] != wj["speaker"]:
-                if max(wi["start"], wj["start"]) < min(wi["end"], wj["end"]):
+                if max(wi["start_time"], wj["start_time"]) < min(wi["end_time"], wj["end_time"]):
                     overlap_idxs.add(i)
                     overlap_idxs.add(j)
 
@@ -204,7 +261,7 @@ def words_to_speaker_turn_dicts(words):
     return turns
 
 
-class AMIWordChunkDataset(torch.utils.data.Dataset):
+class AMIWordChunkDataset(Dataset):
     def __init__(
         self,
         conversations,
@@ -212,6 +269,7 @@ class AMIWordChunkDataset(torch.utils.data.Dataset):
         overlap_scramble_prob=0.5,
         scramble_window=6,
         seed=42,
+        sr=16000
     ):
         self.word_budget = word_budget
         self.overlap_scramble_prob = overlap_scramble_prob
@@ -220,7 +278,7 @@ class AMIWordChunkDataset(torch.utils.data.Dataset):
 
         self.meetings = []
         self.word_streams = {}
-
+        self.sample_rate= sr
         for meeting, df in conversations.items():
             words = meeting_to_words(df)
             if len(words) >= word_budget:
@@ -231,21 +289,28 @@ class AMIWordChunkDataset(torch.utils.data.Dataset):
         return len(self.meetings) * 1000  # virtual length
 
     def __getitem__(self, idx):
+        # --------------------------------------------------
+        # Select meeting and continuous word chunk
+        # --------------------------------------------------
         meeting = self.meetings[idx % len(self.meetings)]
         stream = self.word_streams[meeting]
 
-        # sample continuous span
         start = self.rng.randint(0, len(stream) - self.word_budget)
         chunk = stream[start:start + self.word_budget]
 
-        # ---------- TARGET ----------
+        # --------------------------------------------------
+        # TARGET: annotated conversation (clean)
+        # --------------------------------------------------
         target = words_to_speaker_turn_dicts(chunk)
 
-        speakers = sorted({t["speaker"] for t in target})
         arrival_order = speaker_arrival_order(target)
+        num_speakers = len(arrival_order)
 
-        # ---------- INPUT ----------
+        # --------------------------------------------------
+        # INPUT TEXT: ASR-like (no speaker info)
+        # --------------------------------------------------
         clean_words = [w["word"] for w in chunk]
+
         overlap_idxs = find_overlap_indices(chunk)
 
         input_words = clean_words.copy()
@@ -256,16 +321,46 @@ class AMIWordChunkDataset(torch.utils.data.Dataset):
                 self.rng,
                 self.scramble_window,
             )
-        clean_words = remove_punctuation(input_words)
-        clean_input_words = " ".join(clean_words)
+
+        input_words = remove_punctuation(input_words)
+        input_text = " ".join(input_words)
+
+        # --------------------------------------------------
+        # INPUT AUDIO: mixture (Array1 channel 0)
+        # --------------------------------------------------
+        audio = load_audio_segment(
+            path=chunk[0]["audio_path"],
+            start_time=chunk[0]["start_time"],
+            end_time=chunk[-1]["end_time"],
+            sr=self.sample_rate,
+        )
+
+        # --------------------------------------------------
+        # Return sample
+        # --------------------------------------------------
         return {
-            "input_text": clean_input_words ,
+            "meeting": meeting,
+
+            # inputs
+            "input_audio": audio,        # 1D numpy array or torch tensor
+            "input_text": input_text,
+
+            # target
             "target": target,
-            "speakers": speakers,
-            "num_speakers": len(speakers),
+
+            # speaker metadata (for permutation safety)
             "arrival_order": arrival_order,
+            "num_speakers": num_speakers,
         }
 
+def write_conversation_txt(conversation, path):
+    with open(path, "w", encoding="utf-8") as f:
+        for turn in conversation:
+            speaker = turn["speaker"]
+            text = turn["text"].strip()
+
+            f.write(f"Speaker {speaker}:\n")
+            f.write(f"  {text}\n\n")
 
 if __name__ == "__main__":
     convs = load_conversations("/home/workspace/yoavellinson/LLM_SD/data/ami_synced/ami_utterances.csv")
@@ -274,9 +369,21 @@ if __name__ == "__main__":
     train_ds = AMIWordChunkDataset(
         train_convs,
         word_budget=256,
-        overlap_scramble_prob=0.5,
+        overlap_scramble_prob=0.5
     )
 
-    train_loader = DataLoader(train_ds,batch_size=6,collate_fn=ami_collate_fn)
+    train_loader = DataLoader(train_ds,batch_size=6,collate_fn=ami_collate_fn,shuffle=True)
+    path = Path('/home/workspace/yoavellinson/LLM_SD/mock')
+    ms =[]
     for step,batch in enumerate(train_loader):
-        print(batch)
+        # print(batch)
+        for i in range(len(batch['audio'])):
+            a = batch['audio'][i]
+            t = batch['target'][i]
+            m =batch['meeting'][i]
+            if not m[:2] in ms:
+                ms.append(m[:2])
+                sf.write(path/f'meeting_{m}_audio_{step+i}.wav',a,16000)
+                write_conversation_txt(t,path/f'meeting_{m}_text_{step+i}.txt')
+        if len(ms)==6:
+            break

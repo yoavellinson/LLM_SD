@@ -21,7 +21,60 @@ import xml.etree.ElementTree as ET
 
 NITE_NS = "http://nite.sourceforge.net/"
 WORD_ID_RE = re.compile(r"\.words(\d+)")
+ARRAY_RE = re.compile(r"\.Array(\d+)-01\.wav$")
 
+def resolve_meeting_audio(
+    meeting: str,
+    audio_root: Path,
+    preferred_array: int = 1,
+):
+    """
+    Resolve best available audio file for a meeting.
+
+    Priority:
+    1. Preferred array (Array{preferred_array}-01.wav)
+    2. Any other ArrayX-01.wav
+    3. Mix-Lapel.wav
+    4. Mix-Headset.wav
+
+    Returns:
+        Path to audio file
+
+    Raises:
+        FileNotFoundError if nothing usable found
+    """
+
+    audio_dir = audio_root / meeting / "audio"
+    if not audio_dir.exists():
+        raise FileNotFoundError(f"No audio dir for meeting {meeting}")
+
+    # 1️⃣ Preferred array
+    preferred = audio_dir / f"{meeting}.Array{preferred_array}-01.wav"
+    if preferred.exists():
+        return preferred
+
+    # 2️⃣ Any other array
+    array_files = sorted(
+        p for p in audio_dir.glob(f"{meeting}.Array*-01.wav")
+        if ARRAY_RE.search(p.name)
+    )
+    if array_files:
+        return array_files[0]
+
+    # 3️⃣ Mix lapel
+    lapel = audio_dir / f"{meeting}.Mix-Lapel.wav"
+    if lapel.exists():
+        return lapel
+
+    # 4️⃣ Mix headset
+    headset = audio_dir / f"{meeting}.Mix-Headset.wav"
+    if headset.exists():
+        return headset
+
+    # ❌ Nothing found
+    raise FileNotFoundError(
+        f"No usable audio found for meeting {meeting}"
+    )
 
 # -------------------------------------------------
 # XML parsing (NITE-safe)
@@ -58,39 +111,28 @@ def load_words_by_id(words_xml: Path):
     return words
 
 
-def _read_float_attrib(elem, key: str):
-    """Robust float reader for XML attributes; returns None if missing/unparseable."""
-    v = elem.attrib.get(key)
-    if v is None:
-        return None
-    try:
-        return float(v)
-    except ValueError:
-        return None
+def get_mixture_audio_path(audio_root, meeting):
+    return (
+        audio_root
+        / meeting
+        / "audio"
+        / f"{meeting}.Array1-01.wav"
+    )
 
-
-def parse_segments_xml(seg_xml: Path, words_xml: Path):
-    """
-    Parse NITE segments.xml + words.xml into utterances.
-    Extract real time from segment attributes:
-      - transcriber_start / transcriber_end
-    """
-    fname = seg_xml.name           # EN2001a.A.segments.xml
-    meeting = fname[:6]            # EN2001a (first 6 chars)
-    speaker = fname[7].upper()     # 'A' in EN2001a.A...
-
-    # If your filenames are actually EN2001a.A..., meeting should be 7 chars.
-    # The original script used 6; AMI meetings are typically 7 like EN2001a.
-    # We'll infer meeting as up to the first dot to be safe.
-    meeting = fname.split(".")[0]  # e.g., EN2001a
-    speaker = fname.split(".")[1].upper()  # e.g., A
+def parse_segments_xml(seg_xml, words_xml, audio_root):
+    fname = seg_xml.name
+    s = fname.split('.')            # ES2002a.A.segments.xml
+    meeting = s[0]             # ES2002a
+    speaker = s[1]      # A / B / C / D
 
     words = load_words_by_id(words_xml)
     root = ET.parse(seg_xml).getroot()
 
+    # mixture_audio = get_mixture_audio_path(audio_root, meeting)
+    mixture_audio = resolve_meeting_audio(meeting,audio_root)
     utterances = []
 
-    for seg in root.iter("segment"):  # 'segment' has NO namespace
+    for seg in root.iter("segment"):
         child = seg.find(f"{{{NITE_NS}}}child")
         if child is None:
             continue
@@ -106,26 +148,20 @@ def parse_segments_xml(seg_xml: Path, words_xml: Path):
         start_id = int(ids[0])
         end_id = int(ids[-1])
 
-        seg_words = [words[i] for i in range(start_id, end_id + 1) if i in words]
+        seg_words = [
+            words[i] for i in range(start_id, end_id + 1)
+            if i in words
+        ]
         if not seg_words:
             continue
-
-        start_real = _read_float_attrib(seg, "transcriber_start")
-        end_real = _read_float_attrib(seg, "transcriber_end")
-
-        # Sometimes AMI also has "starttime"/"endtime" variants in other exports;
-        # keep them as fallback if needed.
-        if start_real is None:
-            start_real = _read_float_attrib(seg, "starttime")
-        if end_real is None:
-            end_real = _read_float_attrib(seg, "endtime")
 
         utterances.append({
             "meeting": meeting,
             "speaker": speaker,
             "text": " ".join(seg_words),
-            "start_real": start_real,
-            "end_real": end_real,
+            "start_time": float(seg.attrib["transcriber_start"]),
+            "end_time": float(seg.attrib["transcriber_end"]),
+            "audio_path": str(mixture_audio),
         })
 
     return utterances
@@ -135,7 +171,7 @@ def parse_segments_xml(seg_xml: Path, words_xml: Path):
 # Dataset construction
 # -------------------------------------------------
 
-def load_all_utterances(ami_root: Path):
+def load_all_utterances(ami_root, audio_root):
     segments_dir = ami_root / "segments"
     words_dir = ami_root / "words"
 
@@ -145,9 +181,13 @@ def load_all_utterances(ami_root: Path):
         words_xml = words_dir / seg_xml.name.replace(".segments.xml", ".words.xml")
         if not words_xml.exists():
             continue
-        all_utts.extend(parse_segments_xml(seg_xml, words_xml))
+
+        all_utts.extend(
+            parse_segments_xml(seg_xml, words_xml, audio_root)
+        )
 
     return all_utts
+
 
 
 def assign_tokens_and_time(utterances):
@@ -161,8 +201,8 @@ def assign_tokens_and_time(utterances):
     """
     def sort_key(u):
         # Place None times at the end, but keep deterministic ordering.
-        sr = u["start_real"]
-        er = u["end_real"]
+        sr = u["start_time"]
+        er = u["end_time"]
         sr_key = sr if sr is not None else float("inf")
         er_key = er if er is not None else float("inf")
         return (u["meeting"], sr_key, er_key, u["speaker"], u["text"])
@@ -193,7 +233,7 @@ def assign_tokens_and_time(utterances):
 # -------------------------------------------------
 
 def write_csv(utterances, out_csv: Path):
-    fields = ["token", "meeting", "speaker", "start", "end", "start_real", "end_real", "text"]
+    fields = ["token", "meeting", "speaker", "start", "end", "start_time", "end_time", "text","audio_path"]
     with open(out_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
@@ -248,12 +288,13 @@ def sanity_check(utterances):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ami_root", default="/home/workspace/yoavellinson/AMICorpusXML/data/ami_public_manual_1.6.2", type=Path)
-    parser.add_argument("--out_dir", default="/home/workspace/yoavellinson/LLM_SD/ami_synced", type=Path)
+    parser.add_argument("--out_dir", default="/home/workspace/yoavellinson/LLM_SD/data/ami_synced", type=Path)
+    parser.add_argument("--audio_root", default="/dsi/gannot-lab/gannot-lab2/datasets2/amicorpus/amicorpus", type=Path)
     args = parser.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    utterances = load_all_utterances(args.ami_root)
+    utterances = load_all_utterances(args.ami_root,args.audio_root)
     utterances = assign_tokens_and_time(utterances)
 
     # Optional: fail fast if something is inconsistent
