@@ -3,6 +3,7 @@ from nltk.tokenize import word_tokenize
 import nltk
 from nltk.tokenize.texttiling import TextTilingTokenizer
 import re
+from sklearn.metrics import precision_recall_fscore_support
 
 # ------------------------------------------------------------------
 # NLTK resources
@@ -25,7 +26,7 @@ def ensure_nltk_resources():
             nltk.download(r, quiet=True)
 
 
-ensure_nltk_resources()
+# ensure_nltk_resources()
 
 # ------------------------------------------------------------------
 # Text-only speaker tiling
@@ -222,3 +223,48 @@ def save_diarization(
             f.write(f"[{s['speaker']}] {s['text']}\n")
 
     return out_file
+
+
+def gt_boundaries_from_target(target):
+    """
+    Ground-truth boundaries from speaker turns.
+    Returns a list of length (num_words - 1).
+    """
+    boundaries = []
+    for seg in target:
+        words = _PUNCT_RE.sub("", seg["text"])
+        words = word_tokenize(words)
+        if not boundaries:
+            boundaries.extend([0] * (len(words) - 1))
+        else:
+            boundaries.append(1)              # boundary at segment start
+            boundaries.extend([0] * (len(words) - 1))
+    return boundaries
+
+def pred_boundaries_from_word_labels(pred):
+    """
+    Predicted boundaries from word-level speaker predictions.
+    """
+    boundaries = []
+    for i in range(len(pred) - 1):
+        boundaries.append(
+            1 if pred[i]["speaker"] != pred[i + 1]["speaker"] else 0
+        )
+    return boundaries
+
+def boundary_segmentation_f1(pred, target):
+    gt_b = gt_boundaries_from_target(target)
+    pred_b = pred_boundaries_from_word_labels(pred)
+
+    n = min(len(gt_b), len(pred_b))
+    gt_b = gt_b[:n]
+    pred_b = pred_b[:n]
+
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        gt_b, pred_b, average="binary", zero_division=0
+    )
+    return {
+        "boundary_f1": f1,
+        "boundary_precision": precision,
+        "boundary_recall": recall,
+    }

@@ -1,0 +1,9 @@
+{
+  "num_samples": 1,
+  "word_acc_mean": 0.125,
+  "seg_acc_mean": 0.15789473684210525,
+  "boundary_f1_mean": 0.0,
+  "boundary_precision_mean": 0.0,
+  "boundary_recall_mean": 0.0,
+  "coverage_mean": 1.0
+}

@@ -7,7 +7,16 @@ from data.ami_dataset import (
 from torch.utils.data import DataLoader
 from pathlib import Path
 from nltk_utils import *
-
+import numpy as np
+import random
+import torch
+import json
+from datetime import datetime
+SEED=42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
 # -------------------------------------------------------------
 # Load data
 # -------------------------------------------------------------
@@ -74,12 +83,17 @@ for step, batch in enumerate(test_loader):
     word_acc = word_speaker_accuracy(pred, gt)
     seg_acc = segment_consistency_accuracy(pred, target)
     align = alignment_stats(pred, gt)
+    boundary_metrics = boundary_segmentation_f1(pred, target)
+
 
     results.append({
         "step": step,
         "word_acc": word_acc,
         "seg_acc": seg_acc,
         "coverage": align["coverage"],
+        "boundary_f1": boundary_metrics["boundary_f1"],
+        "boundary_precision": boundary_metrics["boundary_precision"],
+        "boundary_recall": boundary_metrics["boundary_recall"],
     })
     pred_sentences = pred_words_to_sentences(pred)
 
@@ -88,8 +102,8 @@ for step, batch in enumerate(test_loader):
             f"[{step:04d}] "
             f"WordAcc={word_acc:.3f} | "
             f"SegAcc={seg_acc:.3f} | "
-            f"Coverage={align['coverage']:.2f}"
-        )
+            f"B-F1={boundary_metrics['boundary_f1']:.3f}"
+            )
         save_diarization(
             path=SAVE_DIR,
             step=step,
@@ -99,20 +113,36 @@ for step, batch in enumerate(test_loader):
                 "word_acc": round(word_acc, 3),
                 "seg_acc": round(seg_acc, 3),
                 "coverage": round(align["coverage"], 3),
+                "boundary_f1": round(boundary_metrics["boundary_f1"], 3),
+                "boundary_precision": round(boundary_metrics["boundary_precision"], 3),
+                "boundary_recall": round(boundary_metrics["boundary_recall"], 3),
                 "num_words_pred": len(pred),
                 "num_words_gt": len(gt),
             },
         )
-        
-
+      
 # -------------------------------------------------------------
-# Summary
+# Save means only
 # -------------------------------------------------------------
 
-import numpy as np
+means = {
+    "num_samples": len(results),
+    "word_acc_mean": float(np.mean([r["word_acc"] for r in results])),
+    "seg_acc_mean": float(np.mean([r["seg_acc"] for r in results])),
+    "boundary_f1_mean": float(np.mean([r["boundary_f1"] for r in results])),
+    "boundary_precision_mean": float(np.mean([r["boundary_precision"] for r in results])),
+    "boundary_recall_mean": float(np.mean([r["boundary_recall"] for r in results])),
+    "coverage_mean": float(np.mean([r["coverage"] for r in results])),
+}
+
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+out_path = SAVE_DIR / f"a_means_{timestamp}.json"
+
+with open(out_path, "w") as f:
+    json.dump(means, f, indent=2)
 
 print("=" * 60)
-print("Mean word accuracy   :", np.mean([r["word_acc"] for r in results]))
-print("Mean segment accuracy:", np.mean([r["seg_acc"] for r in results]))
-print("Mean coverage        :", np.mean([r["coverage"] for r in results]))
+for k, v in means.items():
+    print(f"{k:20s}: {v}")
 print("=" * 60)
+print(f"Saved means to: {out_path}")
