@@ -6,7 +6,7 @@ from torch.nn.utils.rnn import pad_sequence
 import soundfile as sf
 from pathlib import Path
 import re
-
+import numpy as np
 _PUNCT_RE = re.compile(r"[^\w\s]")
 PRE_PAD  = 0.5   # seconds
 POST_PAD = 1.0   # seconds
@@ -269,7 +269,8 @@ class AMIWordChunkDataset(Dataset):
         overlap_scramble_prob=0.5,
         scramble_window=6,
         seed=42,
-        sr=16000
+        sr=16000,
+        text_only=False
     ):
         self.word_budget = word_budget
         self.overlap_scramble_prob = overlap_scramble_prob
@@ -279,12 +280,13 @@ class AMIWordChunkDataset(Dataset):
         self.meetings = []
         self.word_streams = {}
         self.sample_rate= sr
+        self.text_only=text_only
         for meeting, df in conversations.items():
             words = meeting_to_words(df)
             if len(words) >= word_budget:
                 self.meetings.append(meeting)
                 self.word_streams[meeting] = words
-
+    
     def __len__(self):
         return len(self.meetings) * 1000  # virtual length
 
@@ -328,13 +330,15 @@ class AMIWordChunkDataset(Dataset):
         # --------------------------------------------------
         # INPUT AUDIO: mixture (Array1 channel 0)
         # --------------------------------------------------
-        audio = load_audio_segment(
-            path=chunk[0]["audio_path"],
-            start_time=chunk[0]["start_time"],
-            end_time=chunk[-1]["end_time"],
-            sr=self.sample_rate,
-        )
-
+        if not self.text_only:
+            audio = load_audio_segment(
+                path=chunk[0]["audio_path"],
+                start_time=chunk[0]["start_time"],
+                end_time=chunk[-1]["end_time"],
+                sr=self.sample_rate,
+            )
+        else:
+            audio= np.zeros(1)
         # --------------------------------------------------
         # Return sample
         # --------------------------------------------------
