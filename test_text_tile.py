@@ -12,11 +12,14 @@ import random
 import torch
 import json
 from datetime import datetime
+from tqdm import tqdm
+
 SEED=42
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
 torch.cuda.manual_seed_all(SEED)
+MAX_SAMPLES=1000
 # -------------------------------------------------------------
 # Load data
 # -------------------------------------------------------------
@@ -33,7 +36,9 @@ test_ds = AMIWordChunkDataset(
     test_convs,
     word_budget=256,
     overlap_scramble_prob=0.5,
+    text_only=True
 )
+
 
 test_loader = DataLoader(
     test_ds,
@@ -48,7 +53,7 @@ test_loader = DataLoader(
 
 results = []
 
-for step, batch in enumerate(test_loader):
+for step, batch in tqdm(enumerate(test_loader),total=MAX_SAMPLES):
 
     text = batch["input_text"][0]
     target = batch["target"][0]
@@ -120,7 +125,8 @@ for step, batch in enumerate(test_loader):
                 "num_words_gt": len(gt),
             },
         )
-      
+    if step >= MAX_SAMPLES:
+        break
 # -------------------------------------------------------------
 # Save means only
 # -------------------------------------------------------------
