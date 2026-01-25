@@ -1,0 +1,87 @@
+_wandb:
+    value:
+        cli_version: 0.21.3
+        e:
+            l7j9resbe06ay49p76u8w4tenm7t58i9:
+                codePath: train_lit.py
+                codePathLocal: train_lit.py
+                cpu_count: 32
+                cpu_count_logical: 64
+                cudaVersion: "12.5"
+                disk:
+                    /:
+                        total: "1006450962432"
+                        used: "946586230784"
+                email: ellinsy@biu.ac.il
+                executable: /usr/bin/python3
+                git:
+                    commit: d3c5754de4486ab97226c89d9c5e589cca4cbb79
+                    remote: git@github.com:yoavellinson/LLM_SD.git
+                gpu: NVIDIA RTX A6000
+                gpu_count: 2
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 10752
+                      memoryTotal: "51527024640"
+                      name: NVIDIA RTX A6000
+                      uuid: GPU-bd0a7279-addb-2b91-0a1d-a507565737dd
+                    - architecture: Ampere
+                      cudaCores: 10752
+                      memoryTotal: "51527024640"
+                      name: NVIDIA RTX A6000
+                      uuid: GPU-9ff0ac0c-a93f-01d5-9c74-3f7168b55fa9
+                host: srv01
+                memory:
+                    total: "270052139008"
+                os: Linux-5.15.0-139-generic-x86_64-with-glibc2.39
+                program: /home/workspace/yoavellinson/LLM_SD/train_lit.py
+                python: CPython 3.12.3
+                root: .
+                startedAt: "2026-01-22T08:18:20.834045Z"
+                writerId: l7j9resbe06ay49p76u8w4tenm7t58i9
+        m:
+            - "1": trainer/global_step
+              "6":
+                - 3
+              "7": []
+            - "2": '*'
+              "5": 1
+              "6":
+                - 1
+              "7": []
+        python_version: 3.12.3
+        t:
+            "1":
+                - 1
+                - 5
+                - 9
+                - 11
+                - 41
+                - 49
+                - 53
+                - 103
+            "2":
+                - 1
+                - 5
+                - 9
+                - 11
+                - 41
+                - 49
+                - 53
+                - 103
+            "3":
+                - 7
+                - 66
+            "4": 3.12.3
+            "5": 0.21.3
+            "6": 4.57.6
+            "12": 0.21.3
+            "13": linux-x86_64
+cont_lambda:
+    value: 0.5
+encoder_name:
+    value: bert-base-uncased
+lr:
+    value: 3e-05
+span_words:
+    value: 3

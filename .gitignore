@@ -209,3 +209,5 @@ __marimo__/
 *mock/*
 *.txt
 *openai_key.py
+*wandb_key.py
+*.ckpt

@@ -1,0 +1,47 @@
+{
+  "os": "Linux-5.15.0-139-generic-x86_64-with-glibc2.39",
+  "python": "CPython 3.12.3",
+  "startedAt": "2026-01-22T08:14:50.144716Z",
+  "program": "/home/workspace/yoavellinson/LLM_SD/train_lit.py",
+  "codePath": "train_lit.py",
+  "codePathLocal": "train_lit.py",
+  "git": {
+    "remote": "git@github.com:yoavellinson/LLM_SD.git",
+    "commit": "d3c5754de4486ab97226c89d9c5e589cca4cbb79"
+  },
+  "email": "ellinsy@biu.ac.il",
+  "root": ".",
+  "host": "srv01",
+  "executable": "/usr/bin/python3",
+  "cpu_count": 32,
+  "cpu_count_logical": 64,
+  "gpu": "NVIDIA RTX A6000",
+  "gpu_count": 2,
+  "disk": {
+    "/": {
+      "total": "1006450962432",
+      "used": "946585915392"
+    }
+  },
+  "memory": {
+    "total": "270052139008"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA RTX A6000",
+      "memoryTotal": "51527024640",
+      "cudaCores": 10752,
+      "architecture": "Ampere",
+      "uuid": "GPU-bd0a7279-addb-2b91-0a1d-a507565737dd"
+    },
+    {
+      "name": "NVIDIA RTX A6000",
+      "memoryTotal": "51527024640",
+      "cudaCores": 10752,
+      "architecture": "Ampere",
+      "uuid": "GPU-9ff0ac0c-a93f-01d5-9c74-3f7168b55fa9"
+    }
+  ],
+  "cudaVersion": "12.5",
+  "writerId": "895a8wdnok9awditfybzv1n64fyxzupc"
+}

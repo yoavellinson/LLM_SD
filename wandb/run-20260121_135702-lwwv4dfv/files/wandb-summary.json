@@ -1,0 +1,1 @@
+{"train/entropy":1.1629774570465088,"epoch":11,"_step":1201,"_timestamp":1.769067268645567e+09,"train_loss":0.9486806392669678,"_runtime":63447,"trainer/global_step":12019,"train/span_acc":0.5277777910232544,"_wandb":{"runtime":63447}}
