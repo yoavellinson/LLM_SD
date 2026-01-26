@@ -20,6 +20,7 @@ from nltk.tokenize import word_tokenize
 # ---- model imports ----
 from speaker_model import SpeakerExtractionModule_bert
 from spans import split_into_spans  
+from whisper_asr import WhisperASRWrapper
 
 _PUNCT_RE = re.compile(r"[^\w\s]")
 
@@ -191,7 +192,7 @@ MODEL_CKPT = Path("/home/workspace/yoavellinson/LLM_SD/ckpt/epoch09-loss0.9531.c
 SPAN_WORDS = 10
 TAU = 0.5
 LOG_EVERY = 50
-
+BATCH_SIZE=1
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 # -------------------------------------------------------------
@@ -206,27 +207,27 @@ test_ds = AMIWordChunkDataset(
     test_convs,
     word_budget=256,
     overlap_scramble_prob=0.5,
-    text_only=True
+    text_only=False
 )
 
 g = torch.Generator().manual_seed(SEED)
 
 test_loader = DataLoader(
     test_ds,
-    batch_size=1,
+    batch_size=BATCH_SIZE,
     collate_fn=ami_collate_fn,
     shuffle=True,
     generator=g,
 )
-
 # -------------------------------------------------------------
 # Load trained model
 # -------------------------------------------------------------
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+whisper_asr = WhisperASRWrapper(batch_size=BATCH_SIZE,device=device)
 
 module = SpeakerExtractionModule_bert.load_from_checkpoint(
     MODEL_CKPT,
-    map_location="cuda",
+    map_location=device,
 )
 module.eval()
 
@@ -240,7 +241,9 @@ results = []
 
 for step, batch in tqdm(enumerate(test_loader), total=MAX_SAMPLES):
 
-    text = batch["input_text"][0]
+    # text = batch["input_text"][0]
+    audio = batch["audio"][0].numpy()
+    text = whisper_asr(audio)
     target = batch["target"][0]
 
     # speakers in order of appearance (GT)
