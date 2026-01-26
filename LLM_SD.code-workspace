@@ -4,7 +4,7 @@
 			"path": "."
 		},
 		{
-			"path": "../../../../dsi/gannot-lab/gannot-lab2/datasets2/amicorpus"
+			"path": "/dsi/gannot-lab/gannot-lab2/datasets2/amicorpus/"
 		}
 	],
 	"settings": {}

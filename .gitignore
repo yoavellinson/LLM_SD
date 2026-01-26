@@ -211,3 +211,6 @@ __marimo__/
 *openai_key.py
 *wandb_key.py
 *.ckpt
+*whisperx*
+*whisperX*
+hf_token.py

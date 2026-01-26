@@ -263,15 +263,6 @@ for step, batch in tqdm(enumerate(test_loader), total=MAX_SAMPLES):
         span_words=SPAN_WORDS,
         tau=TAU,
     )
-    # span_assignments, spans = non_peeling_assignment(
-    #     model=model,
-    #     tokenizer=tokenizer,
-    #     text=text,
-    #     speaker_labels=speaker_labels,
-    #     device=device,
-    #     span_words=SPAN_WORDS,
-    # )
-
     # ---------------------------------------------------------
     # Expand to word-level
     # ---------------------------------------------------------
