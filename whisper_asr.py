@@ -32,12 +32,13 @@ class WhisperASRWrapper:
             generate_kwargs={
             "language": "en",
             "task": "transcribe",
+            "return_timestamps": True
         },
         )
 
     @torch.no_grad()
     def __call__(self, wav_files):
-        out = self.pipe(wav_files)
+        out = self.pipe(wav_files,return_timestamps=True)
         if isinstance(wav_files, list):
             return [o["text"] for o in out]
         return [out["text"]]

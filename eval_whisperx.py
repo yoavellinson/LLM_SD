@@ -23,13 +23,13 @@ import json
 from datetime import datetime
 from tqdm import tqdm
 from difflib import SequenceMatcher
+import string
 
 # -------------------------------------------------------------
 # Seed
 # -------------------------------------------------------------
 SEED = 42
 MAX_SAMPLES = 1000
-
 random.seed(SEED)
 np.random.seed(SEED)
 torch.manual_seed(SEED)
@@ -39,7 +39,7 @@ torch.cuda.manual_seed_all(SEED)
 # Config
 # -------------------------------------------------------------
 SAVE_DIR = Path("/home/workspace/yoavellinson/LLM_SD/diarization_logs_whisperx")
-LOG_EVERY = 25
+LOG_EVERY = 50
 
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -91,9 +91,13 @@ diarize_pipeline = DiarizationPipeline(
 # Utils
 # -------------------------------------------------------------
 def whisperx_run(audio, sr, min_spk, max_spk):
-    result = asr_model.transcribe(audio, batch_size=16)
+    result = asr_model.transcribe(
+        audio,
+        batch_size=16,
+        language="en",
+    )
 
-    lang = result["language"]
+    lang = "en"
     if lang not in align_model_cache:
         align_model_cache[lang] = whisperx.load_align_model(
             language_code=lang,
@@ -118,7 +122,11 @@ def whisperx_run(audio, sr, min_spk, max_spk):
     )
 
     result = whisperx.assign_word_speakers(diarize_segments, result)
-    return result["segments"]
+    segments = result["segments"]
+    segments, speaker_map = remap_whisperx_speakers(segments)
+
+    return segments
+
 
 
 def whisperx_segments_to_words(segments):
@@ -158,6 +166,33 @@ def align_pred_to_gt(pred, gt):
     return aligned
 
 
+def remap_whisperx_speakers(segments):
+    """
+    Remap WhisperX word-level speaker IDs ('00','01',...)
+    to ('A','B','C',...) IN PLACE.
+    """
+
+    seen = []
+    for seg in segments:
+        for w in seg.get("words", []):
+            spk = w.get("speaker")
+            if spk is not None and spk not in seen:
+                seen.append(spk)
+
+    mapping = {
+        spk: string.ascii_uppercase[i]
+        for i, spk in enumerate(seen)
+    }
+
+    # rewrite word-level speakers
+    for seg in segments:
+        for w in seg.get("words", []):
+            if "speaker" in w:
+                w["speaker"] = mapping[w["speaker"]]
+
+    return segments, mapping
+
+
 # -------------------------------------------------------------
 # Run evaluation
 # -------------------------------------------------------------
@@ -168,7 +203,7 @@ for step, batch in tqdm(enumerate(test_loader), total=MAX_SAMPLES):
     if step >= MAX_SAMPLES:
         break
 
-    audio = batch["audio"][0].numpy()
+    audio = batch["audio"][0].numpy().astype("float32")
     target = batch["target"][0]
 
     gt = target_segments_to_word_labels(target)

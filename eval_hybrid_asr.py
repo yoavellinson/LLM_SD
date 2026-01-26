@@ -17,161 +17,89 @@ from tqdm import tqdm
 import re
 from nltk.tokenize import word_tokenize
 
-# ---- model imports ----
-from speaker_model import SpeakerExtractionModule_bert
-from spans import split_into_spans  
-from whisper_asr import WhisperASRWrapper
+from speaker_model import SpeakerExtractionModule
+from speaker_model import encode_words_to_embs, encode_spans
 
 _PUNCT_RE = re.compile(r"[^\w\s]")
+from whisper_asr import WhisperASRWrapper
 
 
-# -------------------------------------------------------------
-# Utils
-# -------------------------------------------------------------
-
-def expand_spans_to_words(span_assignments, spans, words, speaker_labels):
+def expand_ranges_to_words(assignments, ranges, words, speaker_labels):
     """
-    span_assignments: list[int] length = num_spans, value = speaker index
-    spans: list[str]
+    assignments: list[int] per range
+    ranges: list[(a,b)]
     words: list[str]
     """
     pred = []
-    w_idx = 0
-
-    for spk_idx, span in zip(span_assignments, spans):
+    for spk_idx, (a, b) in zip(assignments, ranges):
         spk = speaker_labels[spk_idx]
-        span_words = span.split()
-
-        for _ in span_words:
-            if w_idx >= len(words):
-                break
-            pred.append({
-                "word": words[w_idx],
-                "speaker": spk
-            })
-            w_idx += 1
-
+        for w in words[a:b]:
+            pred.append({"word": w, "speaker": spk})
     return pred
 
 
 @torch.no_grad()
-def peel_with_trained_model(
-    model,
-    tokenizer,
-    text,
-    num_speakers,
-    device,
-    span_words=10,
-    tau=0.5,
-):
+def dynamic_segment_words(model, word_embs, tau=0.5, max_len=8):
     """
-    Iterative speaker peeling WITH online memory updates.
-    This mirrors training-time behavior and prevents the
-    'one sentence per speaker' collapse.
+    word_embs: [T,H]
+    Returns list of ranges (start,end) covering all words.
+    Uses continuity head + memory, resets at predicted boundaries.
     """
+    T = word_embs.size(0)
+    if T == 0:
+        return []
 
-    # --------------------------------------------------
-    # 1) Split text into spans
-    # --------------------------------------------------
-    spans = split_into_spans(text, span_words)
-    num_spans = len(spans)
+    ranges = []
+    s = 0
+    mem = torch.zeros(model.hidden, device=word_embs.device)
 
-    if num_spans == 0:
-        return [], spans
+    for t in range(T - 1):
+        # predict whether t+1 continues same speaker
+        logit = model.cont_logit(word_embs[t], word_embs[t+1], mem)
+        p_same = torch.sigmoid(logit).item()
 
-    # --------------------------------------------------
-    # 2) Encode all spans ONCE
-    # --------------------------------------------------
-    enc = tokenizer(
-        spans,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-    ).to(device)
+        # update memory with current word
+        mem = model.update_memory(word_embs[t], mem)
 
-    span_embs = (
-        model.encoder(**enc)
-        .last_hidden_state.mean(dim=1)
-    )  # [N, H]
+        cur_len = (t + 1) - s
+        if (p_same < tau) or (cur_len >= max_len):
+            ranges.append((s, t + 1))
+            s = t + 1
+            mem = torch.zeros(model.hidden, device=word_embs.device)
 
-    # --------------------------------------------------
-    # 3) Iterative peeling
-    # --------------------------------------------------
-    remaining = list(range(num_spans))
-    assignments = [-1] * num_spans  # speaker index per span
-
-    for k in range(num_speakers):
-
-        if not remaining:
-            break
-
-        memory = torch.zeros(model.hidden, device=device)
-        selected_local = []
-
-        # ---- ONLINE scoring with memory updates ----
-        for idx in remaining:
-            z = span_embs[idx:idx+1]  # [1, H]
-
-            logits = model.score(z, memory)
-            p = torch.sigmoid(logits)[0].item()
-
-            if p > tau:
-                selected_local.append(idx)
-                # 🔑 MEMORY UPDATE (THIS IS THE FIX)
-                memory = model.mem_gru(z.squeeze(0), memory)
-
-        # ---- fallback: force minimum recall ----
-        if len(selected_local) == 0:
-            # score all remaining spans WITHOUT memory
-            base_memory = torch.zeros(model.hidden, device=device)
-            logits_all = model.score(span_embs[remaining], base_memory)
-            probs_all = torch.sigmoid(logits_all)
-
-            k_top = min(2, len(remaining))
-            topk_local = torch.topk(probs_all, k=k_top).indices.tolist()
-            selected_local = [remaining[i] for i in topk_local]
-
-        # ---- assign speaker index ----
-        for idx in selected_local:
-            assignments[idx] = k
-
-        # ---- remove assigned spans ----
-        remaining = [i for i in remaining if i not in selected_local]
-
-    # --------------------------------------------------
-    # 4) Any leftovers → last speaker
-    # --------------------------------------------------
-    last_spk = num_speakers - 1
-    for idx in remaining:
-        assignments[idx] = last_spk
-
-    return assignments, spans
+    ranges.append((s, T))
+    return ranges
 
 
-def non_peeling_assignment(model, tokenizer, text, speaker_labels, device, span_words=10):
-    spans = split_into_spans(text, span_words)
+@torch.no_grad()
+def global_label_spans_with_memory(model, tokenizer, span_texts, num_speakers, device):
+    """
+    Predict speaker for each span in sequence.
+    Maintains a memory per speaker; updates memory of predicted speaker.
+    """
+    if len(span_texts) == 0:
+        return []
 
-    enc = tokenizer(
-        spans,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-    ).to(device)
+    span_embs = encode_spans(tokenizer, model.encoder, span_texts, device)  # [N,H]
 
-    with torch.no_grad():
-        span_embs = model.encoder(**enc).last_hidden_state.mean(dim=1)
+    mems = [torch.zeros(model.hidden, device=device) for _ in range(num_speakers)]
+    assignments = []
 
-    all_probs = []
+    for t in range(span_embs.size(0)):
+        z = span_embs[t]
 
-    for _ in speaker_labels:
-        memory = torch.zeros(model.hidden, device=device)
-        probs = torch.sigmoid(model.score(span_embs, memory))
-        all_probs.append(probs.unsqueeze(1))
+        scores = []
+        for k in range(num_speakers):
+            scores.append(model.score_span(z.unsqueeze(0), mems[k])[0])
+        scores = torch.stack(scores)  # [K]
 
-    all_probs = torch.cat(all_probs, dim=1)  # [num_spans, num_speakers]
-    assignments = torch.argmax(all_probs, dim=1).tolist()
+        k_hat = int(torch.argmax(scores).item())
+        assignments.append(k_hat)
 
-    return assignments, spans
+        mems[k_hat] = model.update_memory(z, mems[k_hat])
+
+    return assignments
+
 
 # -------------------------------------------------------------
 # Seed
@@ -187,12 +115,14 @@ torch.cuda.manual_seed_all(SEED)
 # -------------------------------------------------------------
 # Config
 # -------------------------------------------------------------
-SAVE_DIR = Path("/home/workspace/yoavellinson/LLM_SD/diarization_logs_trained_asr")
-MODEL_CKPT = Path("/home/workspace/yoavellinson/LLM_SD/ckpt/epoch09-loss0.9531.ckpt")
-SPAN_WORDS = 10
-TAU = 0.5
+SAVE_DIR = Path("/home/workspace/yoavellinson/LLM_SD/diarization_logs_hybrid_asr")
+MODEL_CKPT = Path("/home/workspace/yoavellinson/LLM_SD/ckpt_hybrid/last.ckpt")
+
+# Hybrid knobs
+CONT_TAU = 0.5
+MAX_LEN = 8
+
 LOG_EVERY = 50
-BATCH_SIZE=1
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 # -------------------------------------------------------------
@@ -209,7 +139,7 @@ test_ds = AMIWordChunkDataset(
     overlap_scramble_prob=0.5,
     text_only=False
 )
-
+BATCH_SIZE=1
 g = torch.Generator().manual_seed(SEED)
 
 test_loader = DataLoader(
@@ -219,19 +149,17 @@ test_loader = DataLoader(
     shuffle=True,
     generator=g,
 )
+
 # -------------------------------------------------------------
 # Load trained model
 # -------------------------------------------------------------
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
 whisper_asr = WhisperASRWrapper(batch_size=BATCH_SIZE,device=device)
 
-module = SpeakerExtractionModule_bert.load_from_checkpoint(
-    MODEL_CKPT,
-    map_location=device,
-)
+module = SpeakerExtractionModule.load_from_checkpoint(MODEL_CKPT, map_location=device)
 module.eval()
 
-model = module.model   # your SpeakerMemoryModel
+model = module.model
 tokenizer = module.tokenizer
 
 # -------------------------------------------------------------
@@ -241,43 +169,45 @@ results = []
 
 for step, batch in tqdm(enumerate(test_loader), total=MAX_SAMPLES):
 
-    # text = batch["input_text"][0]
     audio = batch["audio"][0].numpy()
     text = whisper_asr(audio)[0]
     target = batch["target"][0]
 
-    # speakers in order of appearance (GT)
+    # speakers in order of appearance (GT labels)
     speaker_labels = []
     for seg in target:
         if seg["speaker"] not in speaker_labels:
             speaker_labels.append(seg["speaker"])
-
     num_speakers = len(speaker_labels)
 
     # ---------------------------------------------------------
-    # Model → span assignments
-    # ---------------------------------------------------------
-    span_assignments, spans = peel_with_trained_model(
-        model=model,
-        tokenizer=tokenizer,
-        text=text,
-        num_speakers=num_speakers,
-        device=device,
-        span_words=SPAN_WORDS,
-        tau=TAU,
-    )
-    # ---------------------------------------------------------
-    # Expand to word-level
+    # Words (same as your current eval)
     # ---------------------------------------------------------
     clean_text = _PUNCT_RE.sub("", text)
     words = word_tokenize(clean_text)
 
-    pred = expand_spans_to_words(
-        span_assignments=span_assignments,
-        spans=spans,
-        words=words,
-        speaker_labels=speaker_labels,
+    # ---------------------------------------------------------
+    # 1) Dynamic segmentation
+    # ---------------------------------------------------------
+    word_embs = encode_words_to_embs(tokenizer, model.encoder, words, device)
+    ranges = dynamic_segment_words(model, word_embs, tau=CONT_TAU, max_len=MAX_LEN)
+    span_texts = [" ".join(words[a:b]) for (a, b) in ranges]
+
+    # ---------------------------------------------------------
+    # 2) Global labeling
+    # ---------------------------------------------------------
+    span_assignments = global_label_spans_with_memory(
+        model=model,
+        tokenizer=tokenizer,
+        span_texts=span_texts,
+        num_speakers=num_speakers,
+        device=device,
     )
+
+    # ---------------------------------------------------------
+    # Expand to word-level
+    # ---------------------------------------------------------
+    pred = expand_ranges_to_words(span_assignments, ranges, words, speaker_labels)
 
     # ---------------------------------------------------------
     # Ground truth
@@ -325,6 +255,7 @@ for step, batch in tqdm(enumerate(test_loader), total=MAX_SAMPLES):
                 "boundary_recall": round(boundary_metrics["boundary_recall"], 3),
                 "num_words_pred": len(pred),
                 "num_words_gt": len(gt),
+                "num_spans_pred": len(ranges),
             },
         )
 
@@ -345,7 +276,7 @@ means = {
 }
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-out_path = SAVE_DIR / f"trained_model_means_{timestamp}.json"
+out_path = SAVE_DIR / f"hybrid_means_{timestamp}.json"
 
 with open(out_path, "w") as f:
     json.dump(means, f, indent=2)
