@@ -143,8 +143,8 @@ class SpeakerExtractionModule(pl.LightningModule):
         self,
         encoder_name="bert-base-uncased",
         lr=3e-5,
-        span_words=3,           # IMPORTANT: small spans for purity
-        cont_lambda=0.5,        # weight for continuity loss
+        span_words=3,          
+        cont_lambda=0.5,       
     ):
         super().__init__()
         self.save_hyperparameters()
