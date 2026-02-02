@@ -1,132 +1,208 @@
-# ContextDiarist    
-# Text-Based Speaker Diarization with Speaker Memory
+# ContextDiarist  
+## Text-Based Speaker Diarization with Speaker Memory
 
-This repository contains the code for a **text-only speaker diarization system** that models speaker identity using a **speaker memory mechanism**, without relying on acoustic features.
-The project explores whether speaker turns can be recovered from **text structure alone**, and compares the proposed methods against strong baselines, including WhisperX.
+This repository contains the code for a **text-only speaker diarization system** that models speaker identity using a **learned speaker memory**, without relying on acoustic features.
 
----
-
-## Overview
-
-Speaker diarization is traditionally treated as an **audio-based problem**.
-In this project, we reformulate diarization as a **text-structural learning task**, where speaker identity is inferred from:
-
-* lexical choice
-* discourse structure
-* consistency across conversational turns
-
-We propose two methods based on a frozen BERT encoder combined with a **learnable speaker memory** that enforces long-range speaker consistency.
+The project investigates whether **speaker turns can be recovered from text structure alone**, and compares the proposed methods against classical text segmentation, LLM-based approaches, and WhisperX.
 
 ---
 
-## Proposed Methods
+## 1. Project Motivation
 
-### 1. BERT Encoder + Speaker Memory (Fixed Spans)
+Speaker diarization is traditionally treated as an **audio-based problem**, relying on acoustic embeddings and voice characteristics.
 
-* The conversation text is split into fixed-length spans (e.g., 10 words).
-* Each span is embedded using a frozen BERT encoder.
-* Each speaker is represented by a **memory vector**, updated over time using a GRU.
-* Spans are assigned to speakers based on compatibility with speaker memory.
-* Training uses span-level cross-entropy loss with teacher-forced memory updates.
+However, many real-world scenarios involve:
+- noisy or degraded audio,
+- missing audio streams,
+- or downstream tasks that operate purely on text.
 
-This method formulates diarization as **span classification with persistent speaker identity**.
-
----
-
-### 2. Hybrid Incremental Span Construction (Next-Token Inspired)
-
-* Speaker turns are built incrementally, starting from a single word.
-* The model predicts whether the next word belongs to the same speaker.
-* Spans grow dynamically based on model confidence.
-* Speaker memory is updated online during span construction.
-
-This approach better aligns with **natural speaker turns** and reduces fragmentation caused by fixed segmentation.
+This project explores whether **speaker identity can be inferred from textual patterns alone**, using:
+- lexical choice,
+- discourse structure,
+- and long-range consistency across turns.
 
 ---
 
-## Speaker Memory Model
+## 2. Problem Statement
+
+**Given a conversation transcript with no speaker labels**, assign a speaker identity to every word or segment, using **text only**.
+
+Formally:
+- **Input**: unsegmented conversational text
+- **Output**: speaker labels per word / segment
+
+The challenge is to maintain **speaker consistency** across distant turns without acoustic cues.
+
+---
+
+## 3. Visual Abstract
+
+Core pipeline (high-level):
+
+![Core pipeline (high-level):](media/overall_pipeline.png)
+
+
+Speaker identity is modeled as a **persistent memory state**, not as a static embedding.
+
+---
+
+## 4. Datasets Used
+
+- **AMI Meeting Corpus (text-only version)**
+  - multi-speaker meeting transcripts
+  - ground-truth speaker annotations
+
+Experiments are conducted on:
+- clean transcripts
+- ASR-generated transcripts (via WhisperX)
+
+---
+A short demo of the proposed problem:
+<video controls>
+  <source src="media/ami_demo.mp4" type="video/mp4">
+</video>
+
+## 5. Data Augmentation and Generation
+
+The dataset pipeline supports:
+- sampling random contiguous chunks (fixed *word budget*)
+- optional overlap scrambling augmentation (disabled for ASR evaluation)
+
+No synthetic speakers or external text corpora are introduced.
+
+---
+
+## 6. Input / Output Examples
+
+**Input**
+
+okay so the next slide shows the results yeah I think that makes sense can you go back one slide
+
+
+**Output**
+[A] okay so the next slide shows the results
+[B] yeah I think that makes sense
+[A] can you go back one slide
+
+
+---
+
+## 7. Models and Pipelines Used
+
+### Baselines
+- TextTiling
+- LLM-based text segmentation
+- WhisperX (ASR + audio-based diarization)
+
+### Proposed Models
+1. **BERT Encoder + Speaker Memory (Fixed Spans)**
+2. **Hybrid Incremental Span Construction (Next-Token Inspired)**
+
+Both models use:
+- frozen `bert-base-uncased` span encoder
+- learnable **speaker memory** updated with a GRU
+
+---
+
+## 8. Speaker Memory Model (Core Contribution)
 
 The speaker memory is a **learned, persistent representation** of each speaker that evolves over time.
 
-* Implemented using a GRU cell.
-* Updated sequentially as new spans or words are assigned.
-* Enforces speaker consistency across distant turns.
-* Separates *what is said* (BERT embeddings) from *who is speaking* (speaker identity).
+**Key idea**
+- BERT encodes *what is said* (local content)
+- speaker memory encodes *who is speaking* (global identity over time)
 
-What the Speaker Memory Represents (Intuition)
+### Why speaker memory?
+Without memory, span classification tends to be unstable:
+- assignments can collapse to one dominant speaker
+- short acknowledgements (“yeah”, “okay”) become ambiguous
+- long-range consistency is not enforced
 
-The speaker memory is not another text embedding.
-Instead, it is a dynamic identity state that summarizes how a specific speaker has spoken so far in the conversation.
+Memory allows the model to:
+- accumulate speaker-specific traits
+- enforce long-range consistency
+- distinguish speakers even when local text is ambiguous
 
-Concretely:
-
-BERT embeddings encode local linguistic content
-- What is being said in this span?
-
-Speaker memory encodes global speaker behavior
-- Does this span sound like the same person as before?
-
-The memory evolves over time and allows the model to reason about speaker continuity, even when turns are far apart or linguistically simila
----
-
-## Dataset
-
-* **AMI Meeting Corpus** (text-only version).
-* Ground-truth speaker annotations are used for training and evaluation.
-* Experiments are conducted on:
-
-  * clean transcripts
-  * ASR-generated transcripts (via WhisperX)
+### Why a GRU?
+- sequential, gated updates (controlled integration of new spans)
+- lightweight and stable for online inference
+- natural fit for conversation streams
 
 ---
 
-## Baselines
+## 9. Training Process and Parameters
 
-The following baselines are evaluated for comparison:
+### Training view (supervised)
+- input: spans + ground-truth speaker IDs
+- loss: **span-level cross-entropy**
+- memory updates: **teacher forcing** (update only the true speaker memory)
 
-* TextTiling (classical segmentation)
-* LLM-based text segmentation
-* WhisperX (audio-based ASR + diarization pipeline)
-
-WhisperX is used as a strong end-to-end reference system.
-
----
-
-## Training
-
-* Encoder: frozen `bert-base-uncased`
-* Loss: span-level **cross-entropy over speaker identities**
-* Speaker imbalance handled with per-speaker loss reweighting
-* Speaker memory updated using teacher forcing during training
-
+### Typical settings
+- encoder: frozen BERT
+- optimizer: AdamW
+- speaker imbalance handled with per-speaker loss reweighting
 
 ---
 
-## Evaluation
+## 10. Inference Process
 
-Evaluation is performed at the **word level**, using:
+At inference time:
+- no ground-truth speaker labels are available
+- speaker memories are updated **online**
+- spans (or incrementally grown segments) are assigned sequentially
 
-* Word-level speaker accuracy
-* Segment consistency accuracy
-* Boundary F1 score
-* Alignment coverage
-
-Custom evaluation scripts are provided for:
-
-* trained text-based models
-* WhisperX-based diarization
+Inference modes:
+- fixed-span peeling assignment
+- hybrid incremental span growth (next-token inspired)
 
 ---
+
+## 11. Metrics
+
+Evaluation is performed at the **word level**:
+- word-level speaker accuracy
+- segment consistency accuracy
+- boundary F1 score
+- alignment coverage
+
+---
+
+## 12. Results
+
+The proposed **BERT + Speaker Memory** model:
+- improves over fixed-span baselines
+- benefits significantly from incremental span construction
+- remains functional under ASR noise
+
+(See the Results tables in the project presentation.)
+
+---
+
+## 13. Repository Structure
+
+.
+├── data/                 # AMI dataset loaders
+├── speaker_model.py      # Speaker memory model
+├── spans.py              # Span construction logic
+├── train_lit.py          # Training script
+├── eval_*.py             # Evaluation pipelines
+├── nltk_utils.py         # Metrics and alignment
+└── README.md
+
+## 14. Team Members
+  - Yoav Ellinson
+  - Alexandra Simanovsky
 
 
 ## Key Takeaway
 
-> Speaker diarization can be effectively approached as a **text-based identity modeling problem**, using persistent speaker memory rather than acoustic embeddings.
+Speaker diarization can be reframed as a text-based identity modeling problem, where persistent speaker memory replaces acoustic embeddings.
 
----
 
 ## Future Work
 
-* Integrate acoustic features with the text-based speaker memory model.
-* Extend the approach to long-context, full-meeting diarization.
-* Evaluate generalization on conversational datasets beyond AMI.
+- integrate acoustic features with speaker memory
+
+- extend to long-context, full-meeting diarization
+
+- evaluate cross-domain generalization beyond AMI
