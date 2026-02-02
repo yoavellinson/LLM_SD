@@ -57,10 +57,7 @@ Experiments are conducted on:
 - ASR-generated transcripts (via WhisperX)
 
 ---
-A short demo of the proposed problem:
-<video controls>
-  <source src="media/ami_demo.mp4" type="video/mp4">
-</video>
+[![Demo video](media/thumbnail.png)](media/ami_demo.mp4)
 
 ## 5. Data Augmentation and Generation
 
