@@ -178,6 +178,7 @@ The proposed **BERT + Speaker Memory** model:
 ---
 
 ## 13. Repository Structure
+```text
 
 .
 ├── data/                 # AMI dataset loaders
@@ -187,6 +188,7 @@ The proposed **BERT + Speaker Memory** model:
 ├── eval_*.py             # Evaluation pipelines
 ├── nltk_utils.py         # Metrics and alignment
 └── README.md
+```
 
 ## 14. Team Members
   - Yoav Ellinson
