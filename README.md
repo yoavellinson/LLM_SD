@@ -165,9 +165,9 @@ Evaluation is performed at the **word level**:
 ---
 
 ## 12. Results
-![Results without ASR](media/results_no_asr.png)
+![Results without ASR](media/res_no_asr.png)
 
-![Results wit ASR](media/results_w_asr.png)
+![Results wit ASR](media/res_w_asr.png)
 
 The proposed **BERT + Speaker Memory** model:
 - improves over fixed-span baselines
