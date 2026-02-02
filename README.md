@@ -174,7 +174,6 @@ The proposed **BERT + Speaker Memory** model:
 - benefits significantly from incremental span construction
 - remains functional under ASR noise
 
-(See the Results tables in the project presentation.)
 
 ---
 
